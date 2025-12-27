@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+target/
+
+# Build outputs
+dist/
+PhotoCull/src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Tauri
+src-tauri/target/

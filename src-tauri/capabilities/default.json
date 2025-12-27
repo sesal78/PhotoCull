@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schemas.tauri.app/capability/2.0.0/schema.json",
+  "identifier": "default",
+  "description": "Main window capabilities for PhotoCull",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "shell:allow-open",
+    {
+      "identifier": "fs:allow-read",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-write",
+      "allow": [{ "path": "**" }]
+    }
+  ]
+}
