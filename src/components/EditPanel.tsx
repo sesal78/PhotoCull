@@ -1,7 +1,7 @@
 import * as Slider from '@radix-ui/react-slider';
 import { useAppStore } from '../store';
-import { saveEdits, aiAnalyze, aiAutoEnhance, AiSuggestion } from '../lib/api';
-import { useCallback, useRef, useState } from 'react';
+import { saveEdits, aiAnalyze, aiAutoEnhance, aiBatchEnhance, AiSuggestion } from '../lib/api';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { EditState, DEFAULT_EDIT_STATE } from '../types';
 
 interface SliderControlProps {
@@ -40,15 +40,48 @@ function SliderControl({ label, value, defaultValue, min, max, step = 1, unit = 
   );
 }
 
+function blendEdits(base: EditState, suggestion: AiSuggestion, strength: number): Partial<EditState> {
+  return {
+    exposure: base.exposure + (suggestion.exposure - base.exposure) * strength,
+    contrast: base.contrast + (suggestion.contrast - base.contrast) * strength,
+    highlights: base.highlights + (suggestion.highlights - base.highlights) * strength,
+    shadows: base.shadows + (suggestion.shadows - base.shadows) * strength,
+    whiteBalanceTemp: base.whiteBalanceTemp + (suggestion.whiteBalanceTemp - base.whiteBalanceTemp) * strength,
+    whiteBalanceTint: base.whiteBalanceTint + (suggestion.whiteBalanceTint - base.whiteBalanceTint) * strength,
+    saturation: base.saturation + (suggestion.saturation - base.saturation) * strength,
+    vibrance: base.vibrance + (suggestion.vibrance - base.vibrance) * strength,
+    sharpeningAmount: base.sharpeningAmount + (suggestion.sharpeningAmount - base.sharpeningAmount) * strength,
+    noiseReduction: base.noiseReduction + (suggestion.noiseReduction - base.noiseReduction) * strength,
+  };
+}
+
+function SceneTag({ label, active }: { label: string; active: boolean }) {
+  if (!active) return null;
+  return (
+    <span className="px-1.5 py-0.5 bg-purple-600/50 text-purple-200 text-[10px] rounded">
+      {label}
+    </span>
+  );
+}
+
 export function EditPanel() {
-  const { selectedFile, selectedEditState, updateEdit, setCropMode, cropMode } = useAppStore();
+  const { selectedFile, selectedEditState, updateEdit, setCropMode, cropMode, files } = useAppStore();
   const saveTimeout = useRef<ReturnType<typeof setTimeout>>();
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<AiSuggestion | null>(null);
+  const [baseEdits, setBaseEdits] = useState<EditState | null>(null);
   const [aiStrength, setAiStrength] = useState(0.8);
+  const [batchProgress, setBatchProgress] = useState<string | null>(null);
 
   const file = selectedFile();
   const edits = selectedEditState();
+
+  useEffect(() => {
+    if (aiSuggestion && baseEdits && file) {
+      const blended = blendEdits(baseEdits, aiSuggestion, aiStrength);
+      updateEdit(file.id, blended);
+    }
+  }, [aiStrength, aiSuggestion, baseEdits, file, updateEdit]);
 
   const handleChange = useCallback(
     (field: keyof EditState, value: number | 0 | 90 | 180 | 270) => {
@@ -83,6 +116,7 @@ export function EditPanel() {
     if (!file) return;
     setIsAiProcessing(true);
     try {
+      setBaseEdits({ ...edits });
       const suggestion = await aiAnalyze(file.id);
       setAiSuggestion(suggestion);
     } catch (e) {
@@ -90,26 +124,68 @@ export function EditPanel() {
     } finally {
       setIsAiProcessing(false);
     }
-  }, [file]);
+  }, [file, edits]);
 
-  const handleAiEnhance = useCallback(async () => {
+  const handleAutoEdit = useCallback(async () => {
     if (!file) return;
     setIsAiProcessing(true);
     try {
-      const newEdits = await aiAutoEnhance(file.id, aiStrength);
+      const newEdits = await aiAutoEnhance(file.id, 1.0);
       updateEdit(file.id, newEdits);
       setAiSuggestion(null);
+      setBaseEdits(null);
+      await saveEdits(file.id, { ...edits, ...newEdits });
     } catch (e) {
-      console.error('AI enhance failed:', e);
+      console.error('Auto edit failed:', e);
     } finally {
       setIsAiProcessing(false);
     }
-  }, [file, aiStrength, updateEdit]);
+  }, [file, edits, updateEdit]);
+
+  const handleBatchEnhance = useCallback(async () => {
+    if (files.length === 0) return;
+    setIsAiProcessing(true);
+    setBatchProgress(`Processing 0/${files.length}...`);
+    try {
+      const fileIds = files.map(f => f.id);
+      const results = await aiBatchEnhance(fileIds, aiStrength);
+      const successCount = results.filter(r => r.success).length;
+      setBatchProgress(`Done: ${successCount}/${files.length} enhanced`);
+      
+      for (const result of results) {
+        if (result.success && result.newEdits) {
+          updateEdit(result.fileId, result.newEdits);
+        }
+      }
+      
+      setTimeout(() => setBatchProgress(null), 3000);
+    } catch (e) {
+      console.error('Batch enhance failed:', e);
+      setBatchProgress('Batch failed');
+      setTimeout(() => setBatchProgress(null), 3000);
+    } finally {
+      setIsAiProcessing(false);
+    }
+  }, [files, aiStrength, updateEdit]);
+
+  const handleApplySuggestion = useCallback(async () => {
+    if (!file || !aiSuggestion || !baseEdits) return;
+    const blended = blendEdits(baseEdits, aiSuggestion, aiStrength);
+    const finalEdits = { ...edits, ...blended };
+    setAiSuggestion(null);
+    setBaseEdits(null);
+    try {
+      await saveEdits(file.id, finalEdits);
+    } catch (e) {
+      console.error('Save failed:', e);
+    }
+  }, [file, aiSuggestion, baseEdits, aiStrength, edits]);
 
   const handleResetAll = useCallback(async () => {
     if (!file) return;
     updateEdit(file.id, DEFAULT_EDIT_STATE);
     setAiSuggestion(null);
+    setBaseEdits(null);
     try {
       await saveEdits(file.id, DEFAULT_EDIT_STATE);
     } catch (e) {
@@ -132,7 +208,7 @@ export function EditPanel() {
           <span className="text-purple-400 text-lg">✨</span>
           <h3 className="text-sm font-semibold text-purple-200">AI Enhance</h3>
         </div>
-        
+
         <div className="flex gap-2 mb-3">
           <button
             onClick={handleAiAnalyze}
@@ -142,11 +218,11 @@ export function EditPanel() {
             {isAiProcessing ? 'Analyzing...' : 'Analyze'}
           </button>
           <button
-            onClick={handleAiEnhance}
-            disabled={isAiProcessing}
-            className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm font-medium rounded transition-colors"
+            onClick={handleApplySuggestion}
+            disabled={isAiProcessing || !aiSuggestion}
+            className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
           >
-            {isAiProcessing ? 'Processing...' : 'Apply'}
+            Apply
           </button>
         </div>
 
@@ -162,30 +238,63 @@ export function EditPanel() {
             max={1}
             step={0.1}
             onValueChange={([v]) => setAiStrength(v)}
+            disabled={!aiSuggestion}
           >
-            <Slider.Track className="bg-surface-700 relative grow rounded-full h-1">
+            <Slider.Track className={`relative grow rounded-full h-1 ${aiSuggestion ? 'bg-surface-700' : 'bg-surface-800'}`}>
               <Slider.Range className="absolute bg-purple-500 rounded-full h-full" />
             </Slider.Track>
-            <Slider.Thumb className="block w-3 h-3 bg-white rounded-full shadow" />
+            <Slider.Thumb className={`block w-3 h-3 bg-white rounded-full shadow ${!aiSuggestion ? 'opacity-50' : ''}`} />
           </Slider.Root>
         </div>
 
         {aiSuggestion && (
           <div className="mt-3 p-2 bg-surface-900/50 rounded text-xs">
-            <div className="flex justify-between text-surface-400 mb-1">
-              <span>Scene: {aiSuggestion.sceneType}</span>
-              <span>Confidence: {Math.round(aiSuggestion.confidence * 100)}%</span>
+            <div className="flex justify-between text-surface-400 mb-2">
+              <span className="font-medium text-purple-300">{aiSuggestion.sceneType}</span>
+              <span>{Math.round(aiSuggestion.confidence * 100)}%</span>
             </div>
-            <div className="text-surface-500 text-[10px] space-y-0.5">
-              <div>Exposure: {aiSuggestion.exposure.toFixed(2)} EV</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              <SceneTag label="Backlit" active={aiSuggestion.sceneDetails.isBacklit} />
+              <SceneTag label="Sunset" active={aiSuggestion.sceneDetails.isSunset} />
+              <SceneTag label="Portrait" active={aiSuggestion.sceneDetails.isPortrait} />
+              <SceneTag label="Landscape" active={aiSuggestion.sceneDetails.isLandscape} />
+              <SceneTag label="Macro" active={aiSuggestion.sceneDetails.isMacro} />
+              <SceneTag label="Night" active={aiSuggestion.sceneDetails.isNight} />
+              <SceneTag label="High ISO" active={aiSuggestion.sceneDetails.isHighIso} />
+            </div>
+            <div className="text-surface-500 text-[10px] grid grid-cols-2 gap-x-2 gap-y-0.5">
+              <div>Exp: {aiSuggestion.exposure.toFixed(2)} EV</div>
               <div>Contrast: {aiSuggestion.contrast.toFixed(0)}</div>
+              <div>Highlights: {aiSuggestion.highlights.toFixed(0)}</div>
+              <div>Shadows: {aiSuggestion.shadows.toFixed(0)}</div>
               <div>Temp: {aiSuggestion.whiteBalanceTemp.toFixed(0)}K</div>
+              <div>NR: {aiSuggestion.noiseReduction.toFixed(0)}</div>
             </div>
+            {aiSuggestion.sceneDetails.colorCast !== 'neutral' && (
+              <div className="mt-1 text-[10px] text-yellow-400">
+                Color cast: {aiSuggestion.sceneDetails.colorCast}
+              </div>
+            )}
           </div>
         )}
+
+        <button
+          onClick={handleBatchEnhance}
+          disabled={isAiProcessing || files.length === 0}
+          className="w-full mt-2 px-3 py-2 bg-purple-700/50 hover:bg-purple-700/70 disabled:bg-purple-900/30 disabled:opacity-50 text-purple-200 text-xs font-medium rounded transition-colors"
+        >
+          {batchProgress || `Batch Enhance All (${files.length})`}
+        </button>
       </div>
 
       <div className="flex gap-2 mb-4">
+        <button
+          onClick={handleAutoEdit}
+          disabled={isAiProcessing}
+          className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white text-sm font-medium rounded transition-colors"
+        >
+          {isAiProcessing ? 'Processing...' : 'Auto Edit'}
+        </button>
         <button
           onClick={handleResetAll}
           className="flex-1 px-3 py-2 bg-surface-700 hover:bg-surface-600 text-surface-300 text-sm rounded transition-colors"
@@ -265,6 +374,24 @@ export function EditPanel() {
         onChange={(v) => handleChange('contrast', v)}
       />
 
+      <SliderControl
+        label="Highlights"
+        value={edits.highlights}
+        defaultValue={DEFAULT_EDIT_STATE.highlights}
+        min={-100}
+        max={100}
+        onChange={(v) => handleChange('highlights', v)}
+      />
+
+      <SliderControl
+        label="Shadows"
+        value={edits.shadows}
+        defaultValue={DEFAULT_EDIT_STATE.shadows}
+        min={-100}
+        max={100}
+        onChange={(v) => handleChange('shadows', v)}
+      />
+
       <h3 className="text-sm font-semibold text-surface-200 mb-4 mt-6 border-b border-surface-700 pb-2">
         Color
       </h3>
@@ -328,6 +455,15 @@ export function EditPanel() {
         max={3}
         step={0.1}
         onChange={(v) => handleChange('sharpeningRadius', v)}
+      />
+
+      <SliderControl
+        label="Noise Reduction"
+        value={edits.noiseReduction}
+        defaultValue={DEFAULT_EDIT_STATE.noiseReduction}
+        min={0}
+        max={100}
+        onChange={(v) => handleChange('noiseReduction', v)}
       />
     </div>
   );

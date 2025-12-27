@@ -56,16 +56,40 @@ export async function exportImages(
   return invoke<ExportResult[]>('export_images', { fileIds, destination, options });
 }
 
+export interface SceneDetails {
+  isBacklit: boolean;
+  isSunset: boolean;
+  isPortrait: boolean;
+  isMacro: boolean;
+  isLandscape: boolean;
+  isNight: boolean;
+  isHighIso: boolean;
+  colorCast: string;
+  dynamicRange: string;
+}
+
 export interface AiSuggestion {
   exposure: number;
   contrast: number;
+  highlights: number;
+  shadows: number;
   whiteBalanceTemp: number;
   whiteBalanceTint: number;
   saturation: number;
   vibrance: number;
   sharpeningAmount: number;
+  noiseReduction: number;
   confidence: number;
   sceneType: string;
+  sceneDetails: SceneDetails;
+}
+
+export interface BatchAiResult {
+  fileId: string;
+  success: boolean;
+  suggestion: AiSuggestion | null;
+  newEdits: EditState | null;
+  error: string | null;
 }
 
 export async function aiAnalyze(fileId: string): Promise<AiSuggestion> {
@@ -74,6 +98,14 @@ export async function aiAnalyze(fileId: string): Promise<AiSuggestion> {
 
 export async function aiAutoEnhance(fileId: string, strength: number): Promise<EditState> {
   return invoke<EditState>('ai_auto_enhance', { fileId, strength });
+}
+
+export async function aiBatchAnalyze(fileIds: string[]): Promise<BatchAiResult[]> {
+  return invoke<BatchAiResult[]>('ai_batch_analyze', { fileIds });
+}
+
+export async function aiBatchEnhance(fileIds: string[], strength: number): Promise<BatchAiResult[]> {
+  return invoke<BatchAiResult[]>('ai_batch_enhance', { fileIds, strength });
 }
 
 export async function initAi(): Promise<void> {

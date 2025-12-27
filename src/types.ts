@@ -26,12 +26,15 @@ export interface EditState {
   rotation: 0 | 90 | 180 | 270;
   exposure: number;
   contrast: number;
+  highlights: number;
+  shadows: number;
   whiteBalanceTemp: number;
   whiteBalanceTint: number;
   saturation: number;
   vibrance: number;
   sharpeningAmount: number;
   sharpeningRadius: number;
+  noiseReduction: number;
 }
 
 export const DEFAULT_EDIT_STATE: EditState = {
@@ -42,12 +45,15 @@ export const DEFAULT_EDIT_STATE: EditState = {
   rotation: 0,
   exposure: 0,
   contrast: 0,
+  highlights: 0,
+  shadows: 0,
   whiteBalanceTemp: 5500,
   whiteBalanceTint: 0,
   saturation: 0,
   vibrance: 0,
   sharpeningAmount: 0,
   sharpeningRadius: 1.0,
+  noiseReduction: 0,
 };
 
 export interface ExportOptions {

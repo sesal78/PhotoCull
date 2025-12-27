@@ -47,12 +47,15 @@ pub struct EditState {
     pub rotation: u16,
     pub exposure: f32,
     pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
     pub white_balance_temp: f32,
     pub white_balance_tint: f32,
     pub saturation: f32,
     pub vibrance: f32,
     pub sharpening_amount: f32,
     pub sharpening_radius: f32,
+    pub noise_reduction: f32,
 }
 
 impl Default for EditState {
@@ -65,12 +68,15 @@ impl Default for EditState {
             rotation: 0,
             exposure: 0.0,
             contrast: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
             white_balance_temp: 5500.0,
             white_balance_tint: 0.0,
             saturation: 0.0,
             vibrance: 0.0,
             sharpening_amount: 0.0,
             sharpening_radius: 1.0,
+            noise_reduction: 0.0,
         }
     }
 }

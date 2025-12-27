@@ -28,6 +28,8 @@ fn main() {
             commands::export_images,
             commands::ai_analyze,
             commands::ai_auto_enhance,
+            commands::ai_batch_analyze,
+            commands::ai_batch_enhance,
             commands::init_ai,
         ])
         .setup(|_app| {

@@ -226,3 +226,153 @@ pub async fn ai_auto_enhance(
 pub fn init_ai() -> Result<(), String> {
     ai_processor::init_ai_model()
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchAiResult {
+    pub file_id: String,
+    pub success: bool,
+    pub suggestion: Option<ai_processor::AiSuggestion>,
+    pub new_edits: Option<EditState>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ai_batch_analyze(
+    file_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<BatchAiResult>, String> {
+    let paths: Vec<(String, String)> = {
+        let files = state.files.lock().unwrap();
+        file_ids.iter()
+            .filter_map(|id| files.get(id).map(|f| (id.clone(), f.path.clone())))
+            .collect()
+    };
+
+    let mut results = Vec::new();
+
+    for (file_id, path) in &paths {
+        let result = match thumbnail::load_image(&path) {
+            Ok(img) => {
+                let resized = image_processor::resize_to_fit(img, 1024);
+                match ai_processor::analyze_image(&resized) {
+                    Ok(suggestion) => BatchAiResult {
+                        file_id: file_id.clone(),
+                        success: true,
+                        suggestion: Some(suggestion),
+                        new_edits: None,
+                        error: None,
+                    },
+                    Err(e) => BatchAiResult {
+                        file_id: file_id.clone(),
+                        success: false,
+                        suggestion: None,
+                        new_edits: None,
+                        error: Some(e),
+                    },
+                }
+            }
+            Err(e) => BatchAiResult {
+                file_id: file_id.clone(),
+                success: false,
+                suggestion: None,
+                new_edits: None,
+                error: Some(e),
+            },
+        };
+        results.push(result);
+    }
+
+    for file_id in file_ids.iter().filter(|id| !paths.iter().any(|(pid, _)| pid == *id)) {
+        results.push(BatchAiResult {
+            file_id: file_id.clone(),
+            success: false,
+            suggestion: None,
+            new_edits: None,
+            error: Some("File not found".to_string()),
+        });
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn ai_batch_enhance(
+    file_ids: Vec<String>,
+    strength: f32,
+    state: State<'_, AppState>,
+) -> Result<Vec<BatchAiResult>, String> {
+    let mut results = Vec::new();
+
+    for file_id in file_ids {
+        let files = state.files.lock().unwrap();
+        let file = match files.get(&file_id) {
+            Some(f) => f.clone(),
+            None => {
+                results.push(BatchAiResult {
+                    file_id: file_id.clone(),
+                    success: false,
+                    suggestion: None,
+                    new_edits: None,
+                    error: Some("File not found".to_string()),
+                });
+                continue;
+            }
+        };
+        drop(files);
+
+        let current_edits = {
+            let states = state.edit_states.lock().unwrap();
+            states.get(&file_id).cloned().unwrap_or_default()
+        };
+
+        match thumbnail::load_image(&file.path) {
+            Ok(img) => {
+                let resized = image_processor::resize_to_fit(img, 1024);
+                match ai_processor::analyze_image(&resized) {
+                    Ok(suggestion) => {
+                        let new_edits = ai_processor::apply_ai_suggestion(&current_edits, &suggestion, strength);
+
+                        let xmp_path = filesystem::get_xmp_path(&file.path);
+                        if let Err(e) = xmp::save_xmp_file(&xmp_path, &new_edits) {
+                            tracing::warn!("Failed to save XMP for {}: {}", file_id, e);
+                        }
+
+                        {
+                            let mut states = state.edit_states.lock().unwrap();
+                            states.insert(file_id.clone(), new_edits.clone());
+                        }
+
+                        results.push(BatchAiResult {
+                            file_id: file_id.clone(),
+                            success: true,
+                            suggestion: Some(suggestion),
+                            new_edits: Some(new_edits),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        results.push(BatchAiResult {
+                            file_id: file_id.clone(),
+                            success: false,
+                            suggestion: None,
+                            new_edits: None,
+                            error: Some(e),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                results.push(BatchAiResult {
+                    file_id: file_id.clone(),
+                    success: false,
+                    suggestion: None,
+                    new_edits: None,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+
+    Ok(results)
+}
