@@ -10,10 +10,10 @@ export interface ImageFile {
 }
 
 export interface CropRect {
-  top: number;
-  left: number;
-  bottom: number;
-  right: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export type Flag = 'none' | 'pick' | 'reject';

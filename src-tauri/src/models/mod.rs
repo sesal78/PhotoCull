@@ -22,10 +22,10 @@ pub struct Dimensions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CropRect {
-    pub top: f32,
-    pub left: f32,
-    pub bottom: f32,
-    pub right: f32,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]

@@ -1,15 +1,47 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use image::codecs::jpeg::JpegEncoder;
+use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use std::io::Cursor;
 use tauri::State;
 
 use crate::models::{EditState, ExportOptions, ExportResult, FolderContents, ImageFile, Flag};
 use crate::services::{filesystem, thumbnail, xmp, export, image_processor, ai_processor};
 
+const MAX_CACHE_SIZE: usize = 10;
+
+pub struct ImageCache {
+    images: HashMap<String, DynamicImage>,
+    order: Vec<String>,
+}
+
+impl ImageCache {
+    fn new() -> Self {
+        Self {
+            images: HashMap::new(),
+            order: Vec::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&DynamicImage> {
+        self.images.get(key)
+    }
+
+    fn insert(&mut self, key: String, img: DynamicImage) {
+        if self.order.len() >= MAX_CACHE_SIZE {
+            if let Some(oldest) = self.order.first().cloned() {
+                self.images.remove(&oldest);
+                self.order.remove(0);
+            }
+        }
+        self.images.insert(key.clone(), img);
+        self.order.push(key);
+    }
+}
+
 pub struct AppState {
     pub files: Mutex<HashMap<String, ImageFile>>,
     pub edit_states: Mutex<HashMap<String, EditState>>,
+    pub image_cache: Mutex<ImageCache>,
 }
 
 impl Default for AppState {
@@ -17,6 +49,7 @@ impl Default for AppState {
         Self {
             files: Mutex::new(HashMap::new()),
             edit_states: Mutex::new(HashMap::new()),
+            image_cache: Mutex::new(ImageCache::new()),
         }
     }
 }
@@ -68,19 +101,43 @@ pub async fn get_preview(
     max_size: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<u8>, String> {
-    let files = state.files.lock().unwrap();
-    let file = files.get(&file_id).ok_or("File not found")?;
-    let path = file.path.clone();
-    drop(files);
+    let path = {
+        let files = state.files.lock().unwrap();
+        let file = files.get(&file_id).ok_or("File not found")?;
+        file.path.clone()
+    };
 
-    let img = thumbnail::load_image(&path)?;
-    let resized = image_processor::resize_to_fit(img, max_size);
-    let processed = image_processor::apply_edits(resized, &edits);
+    let cache_key = format!("{}_{}", file_id, max_size);
+    let img = {
+        let cache = state.image_cache.lock().unwrap();
+        cache.get(&cache_key).cloned()
+    };
+
+    let img = match img {
+        Some(cached) => cached,
+        None => {
+            let loaded = thumbnail::load_image(&path)?;
+            let resized = image_processor::resize_to_fit(loaded, max_size);
+            {
+                let mut cache = state.image_cache.lock().unwrap();
+                cache.insert(cache_key, resized.clone());
+            }
+            resized
+        }
+    };
+
+    let cropped = if let Some(ref crop) = edits.crop {
+        image_processor::apply_crop(img, crop)
+    } else {
+        img
+    };
+
+    let processed = image_processor::apply_edits(cropped, &edits);
     let rotated = image_processor::rotate_image(processed, edits.rotation);
 
     let rgb = rotated.to_rgb8();
     let mut buffer = Cursor::new(Vec::new());
-    let encoder = JpegEncoder::new_with_quality(&mut buffer, 85);
+    let encoder = JpegEncoder::new_with_quality(&mut buffer, 80);
     rgb.write_with_encoder(encoder)
         .map_err(|e| format!("Encode failed: {}", e))?;
 
